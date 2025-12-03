@@ -23,7 +23,7 @@ const supabase = createClient(
 );
 
 const corsOptions = {
-  origin: ['http://domice-front.vercel.app', 'localhost:5173'],
+  origin: ['http://domice-front.vercel.app', 'http://localhost:5173', 'domice-front.vercel.app'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
