@@ -23,7 +23,7 @@ const supabase = createClient(
 );
 
 const corsOptions = {
-  origin: 'http://localhost:5173',
+  origin: 'http://domice-front.vercel.app',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -45,9 +45,9 @@ const sendErr = (res, code, message, status = 400) =>
   });
 
 //헬스 체크 무시 ㄱㄱ
-// app.get("/health", (req, res) => {
-//   return sendOk(res, { ok: true });
-// });
+app.get("/health", (req, res) => {
+  return sendOk(res, { ok: true });
+});
 
 // app.get("/health/db", async (req, res) => {
 //   try {
