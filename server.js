@@ -2,12 +2,15 @@ import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 import dotenv from "dotenv";
+import cookieParser from "cookie-parser";
+import jwt from 'jsonwebtoken';
 import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+const JWT_SECRET = process.env.JWT_SECRET;
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
   console.error("[FATAL] SUPABASE_URL 또는 SUPABASE_SERVICE_ROLE_KEY가 없습니다.");
@@ -19,9 +22,17 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-app.use(cors());
+const corsOptions = {
+  origin: 'http://localhost:5173',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
+app.use(cors(corsOptions));
 app.use(morgan("dev"));
 app.use(express.json());
+app.use(cookieParser());
 
 //유틸 함수
 const sendOk = (res, data, status = 200) =>
@@ -155,7 +166,7 @@ app.get("/api/posts", async (req, res) => {
 
     const { data, error } = await supabase
       .from("posts")
-      .select("id, title, user_id, is_secret, created_at, updated_at")
+      .select("id, title, content, user_id, is_secret, created_at, updated_at, profiles(name)")
       .order("created_at", { ascending: false })
       .limit(limit);
 
@@ -183,25 +194,24 @@ app.get("/api/posts", async (req, res) => {
 });
 
 // 게시글 작성
-app.post("/api/posts", async (req, res) => {
+app.post("/api/posts", authenticateToken, async (req, res) => {
   try {
-    const { title, content, is_secret, user_id } = req.body;
+    const { title, content, is_secret } = req.body;
 
-    if (!title || !content || !user_id) {
+    if (!title || !content || is_secret) {
       return sendErr(
         res,
         "BAD_REQUEST",
-        "title, content, user_id는 필수입니다.",
+        "title, content, is_secret는 필수입니다.",
         400
       );
     }
-
-    const secretFlag = typeof is_secret === "boolean" ? is_secret : false;
+    const user_id = req.user.id
 
     const { error } = await supabase.from("posts").insert({
       title,
       content,
-      is_secret: secretFlag,
+      is_secret,
       user_id,
     });
 
@@ -238,7 +248,7 @@ app.get("/api/posts/:postId", async (req, res) => {
 
     const { data, error } = await supabase
       .from("posts")
-      .select("id, title, content, is_secret, user_id, created_at, updated_at")
+      .select("id, title, content, is_secret, user_id, created_at, updated_at, profiles(name)")
       .eq("id", postId)
       .single();
 
@@ -360,14 +370,16 @@ app.delete("/api/posts/:postId", async (req, res) => {
 });
 
 //1대 1문의 목록 조회
-app.get("/api/inquires", async (req, res) => {
+app.get("/api/inquires", authenticateToken, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 20, 50);
+    const user_id = req.user.id
 
     const { data, error } = await supabase
-      .from("inquires") 
+      .from("inquires")
       .select("id, title, content, reply, user_id, created_at, updated_at")
       .order("created_at", { ascending: false })
+      .eq("user_id", user_id)
       .limit(limit);
 
     if (error) {
@@ -392,26 +404,110 @@ app.get("/api/inquires", async (req, res) => {
   }
 });
 
-
-// 내 정보 조회
-app.get("/api/profile", async (req, res) => {
+// 1대1 문의글 상세 조회
+app.get("/api/inquires/:postId", authenticateToken, async (req, res) => {
   try {
-    const userId = req.query.user_id;
+    const postId = Number(req.params.postId);
 
-    if (!userId) {
+    const user_id = req.user.id
+
+    const { data, error } = await supabase
+      .from("inquires")
+      .select("id, title, content, reply, user_id, created_at, updated_at")
+      .eq("id", postId)
+      .single();
+
+    if (error) {
+      console.error("1대1 문의 상세 조회 에러:", error);
+      return sendErr(
+        res,
+        "SERVER_ERROR",
+        "1대1 문의글 조회 중 에러가 발생했습니다.",
+        404
+      );
+    }
+
+    if (!data) {
+      return sendErr(res, "NOT_FOUND", "해당 게시물을 찾을 수 없습니다.", 404);
+    }
+
+    if (data.user_id !== user_id) {
+      return sendErr(
+        res,
+        "FORBIDDEN",
+        "해당 게시물을 열람할 권한이 없습니다.",
+        403
+      );
+    }
+
+    return sendOk(res, data);
+  } catch (e) {
+    console.error("1대1 문의글 상세 조회 예외:", e);
+    return sendErr(
+      res,
+      "SERVER_ERROR",
+      "서버 내부 오류가 발생했습니다.",
+      500
+    );
+  }
+});
+
+// 1대1 문의글 작성
+app.post("/api/inquires", authenticateToken, async (req, res) => {
+  try {
+    const { title, content } = req.body;
+
+    if (!title || !content) {
       return sendErr(
         res,
         "BAD_REQUEST",
-        "user_id 쿼리 파라미터가 필요합니다.",
+        "title, content는 필수입니다.",
         400
       );
     }
 
+    const user_id = req.user.id
+
+    const { error } = await supabase.from("inquires").insert({
+      title,
+      content,
+      user_id,
+    });
+
+    if (error) {
+      console.error("1대1 문의글 작성 에러:", error);
+      return sendErr(
+        res,
+        "SERVER_ERROR",
+        "1대1 문의글 작성 중 오류가 발생했습니다.",
+        500
+      );
+    }
+    return sendOk(res, true, 201);
+  } catch (e) {
+    console.error("1대1 문의글 작성 예외:", e);
+    return sendErr(
+      res,
+      "SERVER_ERROR",
+      "서버 내부 오류가 발생했습니다.",
+      500
+    );
+  }
+});
+
+
+// 내 정보 조회
+app.get("/api/profile", authenticateToken, async (req, res) => {
+  try {
+    const user_id = req.user.id;
+
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, name, class_num, room_num, province, gender")
-      .eq("id", userId)
+      .select("id, name, gender, region, profile_img, room, stu_num, plus_score, minus_score")
+      .eq("id", user_id)
       .single();
+
+    // console.log(data);
 
     if (error || !data) {
       console.error("내 정보 조회 에러:", error);
@@ -424,6 +520,7 @@ app.get("/api/profile", async (req, res) => {
     }
 
     return sendOk(res, data);
+
   } catch (e) {
     console.error("내 정보 조회 예외:", e);
     return sendErr(
@@ -483,8 +580,6 @@ app.put("/api/profile", async (req, res) => {
     );
   }
 });
-
-
 
 // 외출/잔류 선택 제출
 app.post("/api/stay", async (req, res) => {
@@ -581,11 +676,10 @@ app.get("/api/stay", async (req, res) => {
   }
 });
 
-
 //상벌점
-app.get("/api/meritlogs", async (req, res) => {
+app.get("/api/meritlogs", authenticateToken, async (req, res) => {
   try {
-    const userId = req.query.user_id;
+    const userId = req.user.id;
     const limit = Math.min(Number(req.query.limit) || 20, 50);
 
     if (!userId) {
@@ -626,12 +720,11 @@ app.get("/api/meritlogs", async (req, res) => {
   }
 });
 
-
-
 // 입실 체크 등록
-app.post("/api/roomcheckins", async (req, res) => {
+app.post("/api/roomcheckins", authenticateToken, async (req, res) => {
   try {
-    const { user_id, session_type } = req.body;
+    const { session_type } = req.body;
+    const user_id = req.user.id;
 
     if (
       !user_id ||
@@ -683,12 +776,12 @@ app.post("/api/roomcheckins", async (req, res) => {
 });
 
 // 오늘 입실 기록 조회
-app.get("/api/roomcheckins/today", async (req, res) => {
+app.get("/api/roomcheckins/today", authenticateToken, async (req, res) => {
   try {
-    const userId = req.query.user_id;
-    const sessionType = req.query.session_type;
+    const user_id = req.user.id
+    // const sessionType = req.query.session_type;
 
-    if (!userId) {
+    if (!user_id) {
       return sendErr(
         res,
         "BAD_REQUEST",
@@ -702,16 +795,14 @@ app.get("/api/roomcheckins/today", async (req, res) => {
     let query = supabase
       .from("room_checkins")
       .select("id, user_id, check_date, check_time, session_type, created_at")
-      .eq("user_id", userId)
+      .eq("user_id", user_id)
       .eq("check_date", today)
       .order("created_at", { ascending: false })
       .limit(1);
 
-    if (sessionType) {
-      query = query.eq("session_type", sessionType);
-    }
-
     const { data, error } = await query;
+
+    console.log(data);
 
     if (error) {
       console.error("오늘 입실 기록 조회 에러:", error);
@@ -787,19 +878,10 @@ app.post("/api/leave", async (req, res) => {
 });
 
 // 외출 신청 내역 조회
-app.get("/api/leave", async (req, res) => {
+app.get("/api/leave", authenticateToken, async (req, res) => {
   try {
-    const userId = req.query.user_id;
     const limit = Math.min(Number(req.query.limit) || 20, 50);
-
-    if (!userId) {
-      return sendErr(
-        res,
-        "BAD_REQUEST",
-        "user_id 쿼리 파라미터가 필요합니다.",
-        400
-      );
-    }
+    const userId = req.user.id;
 
     const { data, error } = await supabase
       .from("leave_requests")
@@ -832,9 +914,190 @@ app.get("/api/leave", async (req, res) => {
   }
 });
 
+//회원가입
+app.post("/api/auth/signup", async (req, res) => {
+  try {
+    console.log(req.body)
+    const { id,
+      name,
+      room,
+      gender,
+      region,
+      email,
+      profile_img,
+      stu_num } = req.body;
+    if (!id) {
+      return sendErr(
+        res,
+        "BAD_REQUEST",
+        "유저 정보가 필요합니다.",
+        400
+      );
+    }
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .insert({
+        id,
+        name,
+        room,
+        gender,
+        region,
+        email,
+        profile_img,
+        stu_num
+      })
+      .select(
+        "id, name, room, gender, region, email, profile_img, stu_num"
+      )
+      .single();
+
+    if (error) {
+      console.error("로그인 에러:", error);
+      return sendErr(
+        res,
+        "SERVER_ERROR",
+        "유저 조회중 에러가 발생했습니다.",
+        500
+      );
+    }
+
+    return sendOk(res, data, 201);
+  } catch (e) {
+    console.error("로그인 에러:", e);
+    return sendErr(
+      res,
+      "SERVER_ERROR",
+      "서버 내부 오류가 발생했습니다.",
+      500
+    );
+  }
+});
+
+
+//로그인
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { accessToken } = req.body;
+    let userData;
+    if (!accessToken) {
+      return sendErr(
+        res,
+        "BAD_REQUEST",
+        "access_token가 필요합니다.",
+        400
+      );
+    }
+
+    try {
+      const response = await fetch(`https://www.googleapis.com/oauth2/v1/userinfo`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      userData = await response.json();
+      if (userData.email.split("@")[1] != "e-mirim.hs.kr") {
+        return sendErr(res,
+          "Forbiddena",
+          "미림마이스터고등학교 구글 계정만 가능합니다.",
+          403);
+      }
+      userData.stu_num = userData.family_name.slice(0, 4);
+    } catch (error) {
+      console.error('Error fetching user info:', error);
+    }
+
+    const id = userData.id;
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, name, room, stu_num")
+      .eq("id", id)
+
+    console.log(data.length);
+
+    userData.join = data.length == 1 ? true : false;
+    userData.room = data.length == 1 && data[0].room;
+
+    if (error) {
+      console.error("로그인 에러:", error);
+      return sendErr(
+        res,
+        "SERVER_ERROR",
+        "유저 조회중 에러가 발생했습니다.",
+        500
+      );
+    }
+
+    const payload = {
+      id: userData.id
+    };
+
+    const token = generateToken(payload);
+
+    res.cookie('auth_token', token, {
+      maxAge: 1000 * 60 * 60 * 24 * 30,
+      httpOnly: true,
+      secure: false,
+      sameSite: 'Lax',
+    });
+
+    return sendOk(res, userData);
+  } catch (e) {
+    console.error("로그인 에러:", e);
+    return sendErr(
+      res,
+      "SERVER_ERROR",
+      "서버 내부 오류가 발생했습니다.",
+      500
+    );
+  }
+});
+
+//로그아웃
+app.get("/api/auth/logout", async (req, res) => {
+  res.clearCookie('auth_token', {
+    httpOnly: true,
+    secure: false,
+    sameSite: 'Lax',
+  });
+
+  return sendOk(res, { success: "true" });
+});
+
+function generateToken(payload) {
+  // 토큰 생성
+  const token = jwt.sign(
+    payload,
+    JWT_SECRET, // 서명에 사용할 비밀 키
+    {
+      expiresIn: '30d', // 토큰 만료 시간 설정
+      issuer: 'domice', // 토큰 발행자 정보 (선택 사항)
+    }
+  );
+  return token;
+}
+
+function authenticateToken(req, res, next) {
+  const token = req.cookies.auth_token;
+
+  if (!token) {
+    return sendErr(res, 'Unauthorized', '인증 토큰이 누락되었습니다.', 401);
+  }
+
+  try {
+    const verified = jwt.verify(token, JWT_SECRET);
+    req.user = verified;
+    next();
+
+  } catch (err) {
+    return sendErr(res, 'Forbidden', "유효하지 않거나 만료된 토큰입니다.", 403);
+  }
+}
+
 // console.log("SUPABASE_URL:", process.env.SUPABASE_URL);
 // console.log("SERVICE_ROLE_KEY 시작 10글자:", process.env.SUPABASE_SERVICE_ROLE_KEY?.slice(0, 10));
-
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
