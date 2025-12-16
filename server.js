@@ -1198,7 +1198,7 @@ app.get("/api/profile", authenticateToken, async (req, res) => {
     const { data, error } = await supabase
       .from("profiles")
       .select(
-        "id, name, gender, profile_img, room, plus_score, minus_score, role, stu_details(region, stu_num)"
+        "id, name, gender, profile_img, role, stu_details(region, stu_num, room, plus_score, minus_score)"
       )
       .eq("id", user_id)
       .single();
