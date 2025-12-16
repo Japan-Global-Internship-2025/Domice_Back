@@ -4,6 +4,7 @@ import morgan from "morgan";
 import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
@@ -12,6 +13,9 @@ const app = express();
 app.set('trust proxy', true)
 const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET;
+const ALGORITHM = 'aes-256-cbc';
+const ENCRYPTION_KEY = crypto.scryptSync(process.env.QR_CODE_KEY, 'salt', 32);
+const IV_LENGTH = 16;
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
   console.error("[FATAL] SUPABASE_URL 또는 SUPABASE_SERVICE_ROLE_KEY가 없습니다.");
@@ -68,8 +72,7 @@ const getSortOption = (req, defaultColumn = "created_at") => {
 };
 
 // 오늘 날짜 문자열/범위
-const getTodayDateStr = () => {
-  const now = new Date();
+const getTodayDateStr = (now = new Date()) => {
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, "0");
   const d = String(now.getDate()).padStart(2, "0");
@@ -85,6 +88,19 @@ const getTodayRange = () => {
     end: end.toISOString(),
   };
 };
+
+//이번주 금요일 구하는 함수
+function getThisFriday() {
+  const today = new Date();
+  const currentDay = today.getDay();
+  let daysUntilFriday = 5 - currentDay;
+  if (daysUntilFriday < 0) {
+    daysUntilFriday += 7;
+  }
+  today.setDate(today.getDate() + daysUntilFriday);
+
+  return getTodayDateStr(today);
+}
 
 // 헬스 체크
 app.get("/health", (req, res) => {
@@ -132,6 +148,34 @@ function generateToken(payload) {
   return token;
 }
 
+// 암호화 함수
+function encrypt(text) {
+  let iv = crypto.randomBytes(IV_LENGTH);
+  let cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
+
+  let encrypted = cipher.update(text);
+  encrypted = Buffer.concat([encrypted, cipher.final()]);
+
+  return iv.toString('hex') + ':' + encrypted.toString('hex');
+}
+
+// 복호화 함수
+function decrypt(text) {
+  let textParts = text.split(':');
+
+  if (textParts.length < 2) throw new Error('Invalid QR Format');
+
+  let iv = Buffer.from(textParts.shift(), 'hex');
+  let encryptedText = Buffer.from(textParts.join(':'), 'hex');
+
+  let decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
+
+  let decrypted = decipher.update(encryptedText);
+  decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+  return decrypted.toString();
+}
+
 // ===================== 공지 =====================
 
 // 공지 전체 목록 조회 (?sort=latest|oldest, ?limit)
@@ -166,7 +210,7 @@ app.get("/api/notices", async (req, res) => {
 // 오늘 공지 개수 조회 (?grade=1)
 app.get("/api/notices/today-count", authenticateToken, async (req, res) => {
   try {
-    const { grade } = req.user.stu_num[1];
+    const { grade } = String(req.user.stu_num)[1];
     const { start, end } = getTodayRange();
 
     let query = supabase
@@ -568,25 +612,97 @@ app.delete("/api/posts/:postId", authenticateToken, async (req, res) => {
 
 // ===================== 입실 체크 =====================
 
+//QR코드 문자 (암호화)
+app.get("/api/roomcheckins/qr", authenticateToken, requireTeacher, async (req, res) => {
+  const today = new Date().toISOString().split('T')[0];
+
+  const payload = JSON.stringify({
+    date: today,          // 오늘 날짜
+    type: 'DOMICE',   // 데이터 타입
+    nonce: crypto.randomBytes(4).toString('hex')
+  });
+
+  try {
+    const qrData = encrypt(payload);
+    const data = {
+      message: 'QR 코드가 생성되었습니다.',
+      qr_raw_data: qrData, // 암호화된 문자열
+      note: '이 qr_raw_data 문자열을 QR코드로 변환하세요.'
+    }
+
+    return sendOk(res, data, 200);
+  } catch (error) {
+    return sendErr(res, "SERVER_ERROR", '암호화 실패', 500)
+  }
+})
+
 // 입실 체크 등록: 하교/석식 후/8시 복귀
 // body: { check_type: "AFTER_SCHOOL" | "AFTER_DINNER" | "AFTER_8PM" }
 app.post("/api/roomcheckins", authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { check_type } = req.body;
+  console.log(req.body);
+  const { qrData } = req.body;
+  const user_id = req.user.id;
 
-    if (!["AFTER_SCHOOL", "AFTER_DINNER", "AFTER_8PM"].includes(check_type)) {
-      return sendErr(res, "BAD_REQUEST", "유효하지 않은 check_type입니다.", 400);
+  if (!qrData) {
+    return sendErr(res, "Bad_Request", 'QR 데이터가 필요합니다.', 400);
+  }
+
+  try {
+    const decryptedString = decrypt(qrData);
+    const payload = JSON.parse(decryptedString);
+    const today = new Date().toISOString().split('T')[0];
+
+    if (payload.type !== 'DOMICE') {
+      throw new Error('유효하지 않은 QR 타입');
     }
 
+    // 2-2. 날짜 확인 (오늘 날짜와 QR 날짜가 같은지)
+    if (payload.date !== today) {
+      return sendErr(res, "Forbidden", "만료된 QR코드", 403);
+    }
+
+    // 3. 성공 처리 (DB에 입실 기록 저장 등은 여기서 수행)
+    console.log(`[입실 승인] 아이디: ${user_id}, 시간: ${new Date().toLocaleString()}`);
+
+  } catch (error) {
+    console.error('복호화 또는 검증 실패:', error.message);
+    return sendErr(res, 'Unauthorized', "유효하지 않은 QR코드", 401);
+  }
+
+  try {
     const now = new Date();
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    const totalMinutes = hour * 60 + minute;
+
+    const TIME_LIMITS = {
+      AFTER_SCHOOL_START: 960,
+      AFTER_DINNER_START: 990,
+      AFTER_DINNER_START_ACTUAL: 1040,
+      RETURN_8PM_START: 1100,
+      RETURN_8PM_END: 1230,
+      LATE_START: 1230,
+    };
+
+    let check_type;
+    if (totalMinutes < TIME_LIMITS.AFTER_SCHOOL_START) {
+      check_type = 'EARLY';
+    } else if (totalMinutes < TIME_LIMITS.AFTER_DINNER_START) {
+      check_type = 'AFTER_SCHOOL';
+    } else if (totalMinutes < TIME_LIMITS.RETURN_8PM_START) {
+      check_type = 'AFTER_DINNER';
+    } else if (totalMinutes < TIME_LIMITS.LATE_START) {
+      check_type = 'RETURN_8PM';
+    } else {
+      check_type = 'LATE';
+    }
     const checkDate = getTodayDateStr();
     const checkTime = `${String(now.getHours()).padStart(2, "0")}:${String(
       now.getMinutes()
     ).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
 
     const { error } = await supabase.from("room_checkins").insert({
-      user_id: userId,
+      user_id: user_id,
       check_date: checkDate,
       check_time: checkTime,
       check_type,
@@ -613,15 +729,27 @@ app.post("/api/roomcheckins", authenticateToken, async (req, res) => {
 app.get("/api/roomcheckins/today", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
+    const role = req.user.role;
     const checkDate = getTodayDateStr();
 
-    const { data, error } = await supabase
-      .from("room_checkins")
-      .select("id, check_date, check_time, check_type")
-      .eq("user_id", userId)
-      .eq("check_date", checkDate)
+    let query = supabase.from('room_checkins')
+
+    if (role !== 'teacher') {
+      query = query.select('*').eq("user_id", userId)
+    }
+    else {
+      query = query.select('*, profiles(*, stu_details(*))')
+    }
+
+    query = query.eq("check_date", checkDate)
       .order("check_time", { ascending: true });
 
+    let { data, error } = await query
+
+    let processedData = data.map(item => {
+      item.isCheckIn = true;
+      return item;
+    });
     if (error) {
       console.error("오늘 입실 체크 조회 에러:", error);
       return sendErr(
@@ -632,7 +760,7 @@ app.get("/api/roomcheckins/today", authenticateToken, async (req, res) => {
       );
     }
 
-    return sendOk(res, data);
+    return sendOk(res, processedData);
   } catch (e) {
     console.error("오늘 입실 체크 조회 예외:", e);
     return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
@@ -641,11 +769,12 @@ app.get("/api/roomcheckins/today", authenticateToken, async (req, res) => {
 
 // ==================== 외출 신청 및 내역 =================
 // 외출 신청 등록
-app.post("/api/leave", async (req, res) => {
+app.post("/api/leave", authenticateToken, async (req, res) => {
   try {
-    const { user_id, leave_date, reason } = req.body;
+    const { leave_date, reason } = req.body;
+    const user_id = req.user.id;
 
-    if (!user_id || !leave_date || !reason) {
+    if (!leave_date || !reason) {
       return sendErr(
         res,
         "BAD_REQUEST",
@@ -660,11 +789,9 @@ app.post("/api/leave", async (req, res) => {
         user_id,
         leave_date,
         reason,
-        is_approved: null,
-        approved_at: null,
       })
       .select(
-        "id, user_id, leave_date, reason, is_approved, approved_at, created_at"
+        "id, user_id, leave_date, reason, created_at"
       )
       .single();
 
@@ -695,15 +822,22 @@ app.get("/api/leave", authenticateToken, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 20, 50);
     const userId = req.user.id;
+    const role = req.user.role;
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("leave_requests")
-      .select(
-        "id, user_id, leave_date, reason, is_approved, approved_at, created_at"
-      )
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
+
+    if (role !== 'teacher') {
+      query = query.select("id, user_id, leave_date, reason, status, approved_at, created_at").eq("user_id", userId);
+    }
+    else {
+      query = query.select("id, user_id, leave_date, reason, status, approved_at, created_at, profiles(*, stu_details(*))");
+    }
+
+    query = query.order("created_at", { ascending: false })
       .limit(limit);
+
+    let { data, error } = await query;
 
     if (error) {
       console.error("외출 신청 내역 조회 에러:", error);
@@ -727,11 +861,54 @@ app.get("/api/leave", authenticateToken, async (req, res) => {
   }
 });
 
+app.post("/api/leave/check", authenticateToken, requireTeacher, async (req, res) => {
+  try {
+    const { id, approval } = req.body;
+
+    const { data, error } = await supabase
+      .from('leave_requests')
+      .update({ status: approval ? 1 : 2 })
+      .eq('id', id)
+      .select();
+
+    if (!data.length) {
+      return sendErr(
+        res,
+        "NOT_FOUND",
+        "존재하지 않은 외출 신청건입니다.",
+        404
+      );
+    }
+
+    if (error) {
+      console.error("외출 신청 확인 처리 에러:", error);
+      return sendErr(
+        res,
+        "SERVER_ERROR",
+        "외출 신청 확인 처리 중 오류가 발생했습니다.",
+        500
+      );
+    }
+
+    return sendOk(res, {
+      message: "외출이 확인되었습니다.",
+    });
+  }
+  catch (e) {
+    console.error("외출 신청 확인 처리 예외:", e);
+    return sendErr(
+      res,
+      "SERVER_ERROR",
+      "서버 내부 오류가 발생했습니다.",
+      500
+    );
+  }
+});
 
 
-// ===================== 외출/잔류 여부(stay_status) =====================
+// ===================== 외박/잔류 여부(stay_status) =====================
 
-// 외출/잔류 여부 제출
+// 외박/잔류 여부 제출
 // body: { status: "OUT" | "STAY" }
 app.post("/api/stay", authenticateToken, async (req, res) => {
   try {
@@ -747,21 +924,21 @@ app.post("/api/stay", authenticateToken, async (req, res) => {
       );
     }
 
-    const dateString = getTodayDateStr();
+    const select_date = getThisFriday();
 
     const { data: existing, error: fetchError } = await supabase
       .from("stay_status")
       .select("id, status")
       .eq("user_id", user_id)
-      .eq("date", dateString)
+      .eq("select_date", select_date)
       .maybeSingle();
 
     if (fetchError) {
-      console.error("외출/잔류 조회 에러:", fetchError);
+      console.error("외박/잔류 조회 에러:", fetchError);
       return sendErr(
         res,
         "SERVER_ERROR",
-        "외출/잔류 조회 중 오류가 발생했습니다.",
+        "외박/잔류 조회 중 오류가 발생했습니다.",
         500
       );
     }
@@ -773,71 +950,86 @@ app.post("/api/stay", authenticateToken, async (req, res) => {
         .eq("id", existing.id);
 
       if (updateError) {
-        console.error("외출/잔류 상태 업데이트 에러:", updateError);
+        console.error("외박/잔류 상태 업데이트 에러:", updateError);
         return sendErr(
           res,
           "SERVER_ERROR",
-          "외출/잔류 상태 업데이트 중 오류가 발생했습니다.",
+          "외박/잔류 상태 업데이트 중 오류가 발생했습니다.",
           500
         );
       }
 
       return sendOk(res, {
-        message: "외출/잔류 상태가 수정되었습니다.",
+        message: "외박/잔류 상태가 수정되었습니다.",
         status,
       });
     } else {
       const { error: insertError } = await supabase.from("stay_status").insert({
         user_id,
-        date: dateString,
+        select_date: select_date,
         status,
       });
 
       if (insertError) {
-        console.error("외출/잔류 상태 저장 에러:", insertError);
+        console.error("외박/잔류 상태 저장 에러:", insertError);
         return sendErr(
           res,
           "SERVER_ERROR",
-          "외출/잔류 상태 저장 중 오류가 발생했습니다.",
+          "외박/잔류 상태 저장 중 오류가 발생했습니다.",
           500
         );
       }
 
       return sendOk(res, {
-        message: "외출/잔류 상태가 저장되었습니다.",
+        message: "외박/잔류 상태가 저장되었습니다.",
         status,
       });
     }
   } catch (e) {
-    console.error("외출/잔류 여부 제출 예외:", e);
+    console.error("외박/잔류 여부 제출 예외:", e);
     return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-// 외출/잔류 기록 조회 (내가 제출한 것들)
+// 외박/잔류 기록 조회 (내가 제출한 것들)
 app.get("/api/stay", authenticateToken, async (req, res) => {
   try {
     const user_id = req.user.id;
+    const role = req.user.role;
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("stay_status")
-      .select("id, date, status")
-      .eq("user_id", user_id)
-      .order("date", { ascending: false });
+
+    if (role === 'teacher') {
+      query = query.select("id, select_date, status, profiles(*, stu_details(*))")
+    }
+    else {
+      query = query.select("id, select_date, status").eq("user_id", user_id)
+    }
+
+
+    if (req.query.date) {
+      query = query.eq('seletd_date', req.query.date)
+    }
+
+
+    query = query.order("select_date", { ascending: false });
+
+    const { data, error } = await query;
 
     if (error) {
-      console.error("외출/잔류 조회 에러:", error);
+      console.error("외박/잔류 조회 에러:", error);
       return sendErr(
         res,
         "SERVER_ERROR",
-        "외출/잔류 조회 중 오류가 발생했습니다.",
+        "외박/잔류 조회 중 오류가 발생했습니다.",
         500
       );
     }
 
     return sendOk(res, data);
   } catch (e) {
-    console.error("외출/잔류 조회 예외:", e);
+    console.error("외박/잔류 조회 예외:", e);
     return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
@@ -850,8 +1042,8 @@ app.get("/api/meritlogs", authenticateToken, async (req, res) => {
     const user_id = req.user.id;
 
     const { data, error } = await supabase
-      .from("meritlogs")
-      .select("id, reason, plus_score, minus_score, created_at")
+      .from("merit_logs")
+      .select("*")
       .eq("user_id", user_id)
       .order("created_at", { ascending: false });
 
@@ -890,20 +1082,14 @@ app.get(
       const { data, error } = await supabase
         .from("profiles")
         .select(`
-          id,
-          name,
-          gender,
-          profile_img,
-          room,
-          role,
-          stu_details (
-            region,
-            stu_num
-          )
+          *, stu_details!inner (*)
         `)
         .eq("role", "student")
-        .eq("room", room)
-        .order("id", { ascending: true });
+        .eq("stu_details.room", room)
+        .order("stu_num", {
+          ascending: true,
+          foreignTable: "stu_details" // 외래 테이블 지정
+        });
 
       if (error) {
         console.error("호실별 학생 조회 에러:", error);
@@ -932,35 +1118,23 @@ app.post(
   requireTeacher,
   async (req, res) => {
     try {
-      const { user_id, reason, plus_score = 0, minus_score = 0 } = req.body;
+      const { user_id, reason, score, type } = req.body;
 
-      if (!user_id || !reason) {
+      if (!user_id || !reason || !score || !type) {
         return sendErr(
           res,
           "BAD_REQUEST",
-          "user_id와 reason은 필수입니다.",
-          400
-        );
-      }
-
-      const plus = Number(plus_score) || 0;
-      const minus = Number(minus_score) || 0;
-
-      if (plus === 0 && minus === 0) {
-        return sendErr(
-          res,
-          "BAD_REQUEST",
-          "plus_score 또는 minus_score 중 하나는 0이 아니어야 합니다.",
+          "user_id와 reason, scroe, type은 필수입니다.",
           400
         );
       }
 
       // 1) meritlogs에 기록 추가
-      const { error: insertError } = await supabase.from("meritlogs").insert({
+      const { error: insertError } = await supabase.from("merit_logs").insert({
         user_id,
         reason,
-        plus_score: plus,
-        minus_score: minus,
+        log_type: type === 'plus'? '상점' : '벌점',
+        score: score 
       });
 
       if (insertError) {
@@ -976,7 +1150,7 @@ app.post(
       // 2) profiles의 총점 업데이트
       const { data: profile, error: fetchError } = await supabase
         .from("profiles")
-        .select("plus_score, minus_score")
+        .select("stu_details(plus_score, minus_score)")
         .eq("id", user_id)
         .single();
 
@@ -990,11 +1164,11 @@ app.post(
         );
       }
 
-      const newPlus = (profile.plus_score || 0) + plus;
-      const newMinus = (profile.minus_score || 0) + minus;
+      const newPlus = (profile.stu_details.plus_score || 0) + (type == 'plus' && Number(score));
+      const newMinus = (profile.stu_details.minus_score || 0) + (type == 'minus' && Number(score));
 
       const { error: updateError } = await supabase
-        .from("profiles")
+        .from("stu_details")
         .update({
           plus_score: newPlus,
           minus_score: newMinus,
@@ -1011,14 +1185,7 @@ app.post(
         );
       }
 
-      return sendOk(res, {
-        user_id,
-        reason,
-        plus_score: plus,
-        minus_score: minus,
-        total_plus_score: newPlus,
-        total_minus_score: newMinus,
-      });
+      return sendOk(res, true, 201);
     } catch (e) {
       console.error("상벌점 부여 예외:", e);
       return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
@@ -1416,6 +1583,7 @@ app.post("/api/auth/login", async (req, res) => {
 
     userData.room = data.length == 1 && data.role == 'student' ? data[0].stu_details.room : null;
     userData.join = data.length == 1 ? true : false;
+    userData.gender = data.length == 1 && data.gender;
 
     if (error) {
       console.error("로그인 에러:", error);
@@ -1430,7 +1598,8 @@ app.post("/api/auth/login", async (req, res) => {
     const payload = {
       id: userData.id,
       role: userData.role,
-      stu_num: userData.stu_num
+      stu_num: userData.stu_num,
+      gender: userData.gender
     };
 
     const token = generateToken(payload);
