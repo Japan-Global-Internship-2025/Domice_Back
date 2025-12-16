@@ -28,7 +28,7 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
   "https://domice-front.vercel.app",
-  "https://domice-front-72jlh40qc-minjaes-projects-f81b207b.vercel.app/",
+  "https://domice-front-72jlh40qc-minjaes-projects-f81b207b.vercel.app",
   "https://begrudgingly-homostyled-ping.ngrok-free.dev",
 ];
 
