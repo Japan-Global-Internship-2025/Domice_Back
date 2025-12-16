@@ -3,7 +3,7 @@ import cors from "cors";
 import morgan from "morgan";
 import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
-import jwt from 'jsonwebtoken';
+import jwt from "jsonwebtoken";
 import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
@@ -19,29 +19,29 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 // CORS 설정
 const allowedOrigins = [
-  "http://localhost:5173", // Vite 기본 포트
-  "http://localhost:3000", // CRA 기본 포트
-  "https://domice-front.vercel.app", // 실제 배포 프론트 주소로 바꾸기
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "https://domice-front.vercel.app",
+  "http://domice-front.vercel.app",
 ];
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // 개발 환경에서 Postman, curl 등 origin이 없는 경우 허용
-    if (!origin) return callback(null, true);
-
+    if (!origin) return callback(null, true); // Postman 등
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
-
     console.warn("[CORS] 허용되지 않은 Origin:", origin);
     return callback(new Error("Not allowed by CORS"));
   },
   credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 };
 
 app.use(cors(corsOptions));
@@ -49,7 +49,7 @@ app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
 
-//유틸 함수
+// 유틸 함수
 const sendOk = (res, data, status = 200) =>
   res.status(status).json({ success: true, data });
 
@@ -59,51 +59,67 @@ const sendErr = (res, code, message, status = 400) =>
     error: { code, message },
   });
 
-// 공통 정렬 옵션: ?sort=latest | oldest
-function getSortOption(req, defaultColumn = "created_at") {
+const getSortOption = (req, defaultColumn = "created_at") => {
   const { sort } = req.query;
-  if (sort === "oldest") {
-    return { column: defaultColumn, ascending: true };
+  if (sort === "oldest") return { column: defaultColumn, ascending: true };
+  return { column: defaultColumn, ascending: false }; // 기본: 최신순
+};
+
+// 오늘 날짜 문자열/범위
+const getTodayDateStr = () => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+const getTodayRange = () => {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+  };
+};
+
+// 헬스 체크
+app.get("/health", (req, res) => {
+  return sendOk(res, { ok: true });
+});
+
+// ===================== 인증 / 권한 =====================
+
+// 인증 미들웨어
+function authenticateToken(req, res, next) {
+  const token = req.cookies.access_token;
+
+  if (!token) {
+    return sendErr(res, "Unauthorized", "로그인이 필요합니다.", 401);
   }
-  // 기본은 최신순
-  return { column: defaultColumn, ascending: false };
+
+  try {
+    const verified = jwt.verify(token, JWT_SECRET);
+    req.user = verified;
+    next();
+  } catch (err) {
+    console.error("JWT 검증 에러:", err);
+    return sendErr(res, "Forbidden", "유효하지 않거나 만료된 토큰입니다.", 403);
+  }
 }
 
-//헬스 체크 무시 ㄱㄱ
-// app.get("/health", async (req, res) => {
-//   try {
-//     const { data, error } = await supabase.from("profiles").select("id").limit(1);
-//     if (error) {
-//       console.error("Supabase 쿼리 에러:", error);
-//       return res.status(500).json({
-//         success: false,
-//         error: {
-//           code: "DB_ERROR",
-//           message: "Supabase DB 연결에 실패했습니다.",
-//           detail: error.message,
-//         },
-//       });
-//     }
-//     return res.json({
-//       success: true,
-//       data: {
-//         connected: true,
-//         sampleCount: data.length,
-//       },
-//     });
-//   } catch (e) {
-//     console.error("헬스 체크 예외:", e);
-//     return res.status(500).json({
-//       success: false,
-//       error: {
-//         code: "SERVER_ERROR",
-//         message: "서버 내부 오류",
-//       },
-//     });
-//   }
-// });
+// 선생님(관리자) 전용 미들웨어
+function requireTeacher(req, res, next) {
+  if (!req.user || req.user.role !== "teacher") {
+    return sendErr(res, "FORBIDDEN", "선생님만 이용할 수 있는 기능입니다.", 403);
+  }
+  next();
+}
 
-// 공지 전체 목록 조회 (?sort=latest|oldest)
+// ===================== 공지 =====================
+
+// 공지 전체 목록 조회 (?sort=latest|oldest, ?limit)
 app.get("/api/notices", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 20, 50);
@@ -128,17 +144,48 @@ app.get("/api/notices", async (req, res) => {
     return sendOk(res, data);
   } catch (e) {
     console.error("공지 목록 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-// 공지 작성
-app.post("/api/notices", authenticateToken, async (req, res) => {
+// 오늘 공지 개수 조회 (?grade=1)
+app.get("/api/notices/today-count", authenticateToken, async (req, res) => {
+  try {
+    const { grade } = req.query;
+    const { start, end } = getTodayRange();
+
+    let query = supabase
+      .from("notices")
+      .select("id", { count: "exact", head: true })
+      .gte("created_at", start)
+      .lte("created_at", end);
+
+    if (grade) {
+      query = query.contains("target_grades", [Number(grade)]);
+    }
+
+    const { count, error } = await query;
+
+    if (error) {
+      console.error("오늘 공지 개수 조회 에러:", error);
+      return sendErr(
+        res,
+        "SERVER_ERROR",
+        "오늘 공지 개수 조회 중 오류가 발생했습니다.",
+        500
+      );
+    }
+
+    return sendOk(res, { count: count || 0 });
+  } catch (e) {
+    console.error("오늘 공지 개수 조회 예외:", e);
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
+  }
+});
+
+// 공지 작성 (선생님 전용)
+// body: { title, content, target_grades: "[1,2,3]" or [1,2,3] }
+app.post("/api/notices", authenticateToken, requireTeacher, async (req, res) => {
   try {
     const { title, content, target_grades } = req.body;
     const userId = req.user.id;
@@ -155,7 +202,7 @@ app.post("/api/notices", authenticateToken, async (req, res) => {
         return sendErr(
           res,
           "BAD_REQUEST",
-          'target_grades는 "[1,2,3]" 형태의 문자열이거나 배열이어야 합니다.',
+          'target_grades는 "[1,2,3]" 문자열이거나 배열이어야 합니다.',
           400
         );
       }
@@ -187,65 +234,7 @@ app.post("/api/notices", authenticateToken, async (req, res) => {
     return sendOk(res, data, 201);
   } catch (e) {
     console.error("공지 작성 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
-  }
-});
-
-// 오늘 공지 개수 조회 (?grade=1)
-app.get("/api/notices/today-count", authenticateToken, async (req, res) => {
-  try {
-    const { grade } = req.query;
-
-    const now = new Date();
-    const start = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      0, 0, 0
-    ).toISOString();
-    const end = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      23, 59, 59
-    ).toISOString();
-
-    let query = supabase
-      .from("notices")
-      .select("id", { count: "exact", head: true })
-      .gte("created_at", start)
-      .lte("created_at", end);
-
-    if (grade) {
-      query = query.contains("target_grades", [Number(grade)]);
-    }
-
-    const { count, error } = await query;
-
-    if (error) {
-      console.error("오늘 공지 개수 조회 에러:", error);
-      return sendErr(
-        res,
-        "SERVER_ERROR",
-        "오늘 공지 개수 조회 중 오류가 발생했습니다.",
-        500
-      );
-    }
-
-    return sendOk(res, { count: count || 0 });
-  } catch (e) {
-    console.error("오늘 공지 개수 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
@@ -260,69 +249,115 @@ app.get("/api/notices/:noticeId", async (req, res) => {
 
     const { data, error } = await supabase
       .from("notices")
-      .select("id, title, content, target, author, created_at")
+      .select("id, title, content, target_grades, author, created_at, updated_at")
       .eq("id", noticeId)
       .single();
 
     if (error || !data) {
       console.error("공지 상세 조회 에러:", error);
-      return sendErr(
-        res,
-        "NOT_FOUND",
-        "해당 공지를 찾을 수 없습니다.",
-        404
-      );
+      return sendErr(res, "NOT_FOUND", "해당 공지를 찾을 수 없습니다.", 404);
     }
 
     return sendOk(res, data);
   } catch (e) {
     console.error("공지 상세 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-// 공지 삭제
-app.delete("/api/notices/:noticeId", async (req, res) => {
-  try {
-    const noticeId = Number(req.params.noticeId);
+// 공지 수정 (선생님 전용)
+app.put(
+  "/api/notices/:noticeId",
+  authenticateToken,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const noticeId = Number(req.params.noticeId);
+      const { title, content, target_grades } = req.body;
 
-    if (Number.isNaN(noticeId)) {
-      return sendErr(res, "BAD_REQUEST", "유효한 noticeId가 필요합니다.", 400);
+      if (Number.isNaN(noticeId)) {
+        return sendErr(res, "BAD_REQUEST", "유효한 noticeId가 필요합니다.", 400);
+      }
+
+      const updateFields = {};
+
+      if (typeof title === "string") updateFields.title = title;
+      if (typeof content === "string") updateFields.content = content;
+
+      if (typeof target_grades === "string") {
+        try {
+          updateFields.target_grades = JSON.parse(target_grades);
+        } catch (e) {
+          return sendErr(
+            res,
+            "BAD_REQUEST",
+            'target_grades는 "[1,2,3]" 문자열이거나 배열이어야 합니다.',
+            400
+          );
+        }
+      } else if (Array.isArray(target_grades)) {
+        updateFields.target_grades = target_grades;
+      }
+
+      const { error } = await supabase
+        .from("notices")
+        .update(updateFields)
+        .eq("id", noticeId);
+
+      if (error) {
+        console.error("공지 수정 에러:", error);
+        return sendErr(
+          res,
+          "SERVER_ERROR",
+          "공지 수정 중 오류가 발생했습니다.",
+          500
+        );
+      }
+
+      return sendOk(res, true);
+    } catch (e) {
+      console.error("공지 수정 예외:", e);
+      return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
     }
-
-    const { error } = await supabase
-      .from("notices")
-      .delete()
-      .eq("id", noticeId);
-
-    if (error) {
-      console.error("공지 삭제 에러:", error);
-      return sendErr(
-        res,
-        "SERVER_ERROR",
-        "공지 삭제 중 오류가 발생했습니다.",
-        500
-      );
-    }
-
-    return sendOk(res, true);
-  } catch (e) {
-    console.error("공지 삭제 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
   }
-});
+);
 
-// 게시글 목록 조회 (?sort=latest|oldest)
+// 공지 삭제 (선생님 전용)
+app.delete(
+  "/api/notices/:noticeId",
+  authenticateToken,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const noticeId = Number(req.params.noticeId);
+
+      if (Number.isNaN(noticeId)) {
+        return sendErr(res, "BAD_REQUEST", "유효한 noticeId가 필요합니다.", 400);
+      }
+
+      const { error } = await supabase.from("notices").delete().eq("id", noticeId);
+
+      if (error) {
+        console.error("공지 삭제 에러:", error);
+        return sendErr(
+          res,
+          "SERVER_ERROR",
+          "공지 삭제 중 오류가 발생했습니다.",
+          500
+        );
+      }
+
+      return sendOk(res, true);
+    } catch (e) {
+      console.error("공지 삭제 예외:", e);
+      return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
+    }
+  }
+);
+
+// ===================== 게시판(전체 게시판) =====================
+
+// 게시글 목록 조회 (?sort=latest|oldest, ?limit)
 app.get("/api/posts", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 20, 50);
@@ -344,20 +379,14 @@ app.get("/api/posts", async (req, res) => {
       );
     }
 
-    // author_name은 profiles 조인해서 붙일거면 로직 추가 해야함
     return sendOk(res, data);
   } catch (e) {
     console.error("게시글 목록 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-// 내가 쓴 게시글 목록 조회 (?sort=latest|oldest)
+// 내가 쓴 게시글 목록 조회
 app.get("/api/posts/my", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -384,12 +413,7 @@ app.get("/api/posts/my", authenticateToken, async (req, res) => {
     return sendOk(res, data);
   } catch (e) {
     console.error("내 게시글 목록 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
@@ -399,15 +423,15 @@ app.post("/api/posts", authenticateToken, async (req, res) => {
     const { title, content, is_secret } = req.body;
 
     if (!title || !content) {
-      return sendErr(res, "BAD_REQUEST", "제목과 내용은 필수입니다.", 400);
+      return sendErr(res, "BAD_REQUEST", "title, content는 필수입니다.", 400);
     }
 
-    const user_id = req.user.id
+    const user_id = req.user.id;
 
     const { error } = await supabase.from("posts").insert({
       title,
       content,
-      is_secret,
+      is_secret: !!is_secret,
       user_id,
     });
 
@@ -424,12 +448,7 @@ app.post("/api/posts", authenticateToken, async (req, res) => {
     return sendOk(res, true, 201);
   } catch (e) {
     console.error("게시글 작성 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
@@ -444,33 +463,78 @@ app.get("/api/posts/:postId", async (req, res) => {
 
     const { data, error } = await supabase
       .from("posts")
-      .select("id, title, content, user_id, created_at, updated_at")
+      .select("id, title, content, is_secret, user_id, created_at, updated_at, profiles(name)")
       .eq("id", postId)
       .single();
 
     if (error || !data) {
       console.error("게시글 상세 조회 에러:", error);
-      return sendErr(
-        res,
-        "NOT_FOUND",
-        "해당 게시글을 찾을 수 없습니다.",
-        404
-      );
+      return sendErr(res, "NOT_FOUND", "해당 게시글을 찾을 수 없습니다.", 404);
     }
 
     return sendOk(res, data);
   } catch (e) {
     console.error("게시글 상세 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-//게시글 삭제
+// 게시글 수정
+app.put("/api/posts/:postId", authenticateToken, async (req, res) => {
+  try {
+    const postId = Number(req.params.postId);
+
+    if (Number.isNaN(postId)) {
+      return sendErr(res, "BAD_REQUEST", "유효한 postId가 필요합니다.", 400);
+    }
+
+    const { title, content, is_secret } = req.body;
+
+    const { data: post, error: fetchError } = await supabase
+      .from("posts")
+      .select("user_id")
+      .eq("id", postId)
+      .single();
+
+    if (fetchError || !post) {
+      console.error("게시글 조회 에러 (수정 전 확인):", fetchError);
+      return sendErr(res, "NOT_FOUND", "수정할 게시글을 찾을 수 없습니다.", 404);
+    }
+
+    if (post.user_id !== req.user.id) {
+      return sendErr(
+        res,
+        "FORBIDDEN",
+        "본인이 작성한 게시글만 수정할 수 있습니다.",
+        403
+      );
+    }
+
+    const updateFields = {};
+    if (typeof title === "string") updateFields.title = title;
+    if (typeof content === "string") updateFields.content = content;
+    if (typeof is_secret === "boolean") updateFields.is_secret = is_secret;
+
+    const { error } = await supabase.from("posts").update(updateFields).eq("id", postId);
+
+    if (error) {
+      console.error("게시글 수정 에러:", error);
+      return sendErr(
+        res,
+        "SERVER_ERROR",
+        "게시글 수정 중 오류가 발생했습니다.",
+        500
+      );
+    }
+
+    return sendOk(res, true);
+  } catch (e) {
+    console.error("게시글 수정 예외:", e);
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
+  }
+});
+
+// 게시글 삭제
 app.delete("/api/posts/:postId", authenticateToken, async (req, res) => {
   try {
     const postId = Number(req.params.postId);
@@ -487,12 +551,7 @@ app.delete("/api/posts/:postId", authenticateToken, async (req, res) => {
 
     if (fetchError || !post) {
       console.error("게시글 조회 에러 (삭제 전 확인):", fetchError);
-      return sendErr(
-        res,
-        "NOT_FOUND",
-        "삭제할 게시글을 찾을 수 없습니다.",
-        404
-      );
+      return sendErr(res, "NOT_FOUND", "삭제할 게시글을 찾을 수 없습니다.", 404);
     }
 
     if (post.user_id !== req.user.id) {
@@ -519,85 +578,14 @@ app.delete("/api/posts/:postId", authenticateToken, async (req, res) => {
     return sendOk(res, true);
   } catch (e) {
     console.error("게시글 삭제 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-//게시글 수정
-app.put("/api/posts/:postId", authenticateToken, async (req, res) => {
-  try {
-    const postId = Number(req.params.postId);
+// ===================== 입실 체크 =====================
 
-    if (Number.isNaN(postId)) {
-      return sendErr(res, "BAD_REQUEST", "유효한 postId가 필요합니다.", 400);
-    }
-
-    const { title, content, is_secret } = req.body;
-
-    const { data: post, error: fetchError } = await supabase
-      .from("posts")
-      .select("user_id")
-      .eq("id", postId)
-      .single();
-
-    if (fetchError || !post) {
-      console.error("게시글 조회 에러 (수정 전 확인):", fetchError);
-      return sendErr(
-        res,
-        "NOT_FOUND",
-        "수정할 게시글을 찾을 수 없습니다.",
-        404
-      );
-    }
-
-    if (post.user_id !== req.user.id) {
-      return sendErr(
-        res,
-        "FORBIDDEN",
-        "본인이 작성한 게시글만 수정할 수 있습니다.",
-        403
-      );
-    }
-
-    const updateFields = {};
-
-    if (typeof title === "string") updateFields.title = title;
-    if (typeof content === "string") updateFields.content = content;
-    if (typeof is_secret === "boolean") updateFields.is_secret = is_secret;
-
-    const { error } = await supabase
-      .from("posts")
-      .update(updateFields)
-      .eq("id", postId);
-
-    if (error) {
-      console.error("게시글 수정 에러:", error);
-      return sendErr(
-        res,
-        "SERVER_ERROR",
-        "게시글 수정 중 오류가 발생했습니다.",
-        500
-      );
-    }
-
-    return sendOk(res, true);
-  } catch (e) {
-    console.error("게시글 수정 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
-  }
-});
-
-// 입실 체크 등록: POST /api/roomcheckins
+// 입실 체크 등록: 하교/석식 후/8시 복귀
+// body: { check_type: "AFTER_SCHOOL" | "AFTER_DINNER" | "AFTER_8PM" }
 app.post("/api/roomcheckins", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -608,12 +596,7 @@ app.post("/api/roomcheckins", authenticateToken, async (req, res) => {
     }
 
     const now = new Date();
-
-    const checkDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
-      2,
-      "0"
-    )}-${String(now.getDate()).padStart(2, "0")}`;
-
+    const checkDate = getTodayDateStr();
     const checkTime = `${String(now.getHours()).padStart(2, "0")}:${String(
       now.getMinutes()
     ).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
@@ -638,25 +621,15 @@ app.post("/api/roomcheckins", authenticateToken, async (req, res) => {
     return sendOk(res, true, 201);
   } catch (e) {
     console.error("입실 체크 등록 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-// 오늘 입실 체크 조회: GET /api/roomcheckins/today
+// 오늘 입실 체크 조회
 app.get("/api/roomcheckins/today", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-
-    const now = new Date();
-    const checkDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
-      2,
-      "0"
-    )}-${String(now.getDate()).padStart(2, "0")}`;
+    const checkDate = getTodayDateStr();
 
     const { data, error } = await supabase
       .from("roomcheckins")
@@ -678,16 +651,14 @@ app.get("/api/roomcheckins/today", authenticateToken, async (req, res) => {
     return sendOk(res, data);
   } catch (e) {
     console.error("오늘 입실 체크 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-//외출/잔류 여부 제출
+// ===================== 외출/잔류 여부(stay_status) =====================
+
+// 외출/잔류 여부 제출
+// body: { status: "OUT" | "STAY" }
 app.post("/api/stay", authenticateToken, async (req, res) => {
   try {
     const user_id = req.user.id;
@@ -702,8 +673,7 @@ app.post("/api/stay", authenticateToken, async (req, res) => {
       );
     }
 
-    const today = new Date();
-    const dateString = today.toISOString().split("T")[0];
+    const dateString = getTodayDateStr();
 
     const { data: existing, error: fetchError } = await supabase
       .from("stay_status")
@@ -766,15 +736,11 @@ app.post("/api/stay", authenticateToken, async (req, res) => {
     }
   } catch (e) {
     console.error("외출/잔류 여부 제출 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
+// 외출/잔류 기록 조회 (내가 제출한 것들)
 app.get("/api/stay", authenticateToken, async (req, res) => {
   try {
     const user_id = req.user.id;
@@ -798,16 +764,13 @@ app.get("/api/stay", authenticateToken, async (req, res) => {
     return sendOk(res, data);
   } catch (e) {
     console.error("외출/잔류 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-// 상벌점 로그 조회
+// ===================== 상벌점 =====================
+
+// 상벌점 로그 조회 (학생 본인)
 app.get("/api/meritlogs", authenticateToken, async (req, res) => {
   try {
     const user_id = req.user.id;
@@ -831,24 +794,173 @@ app.get("/api/meritlogs", authenticateToken, async (req, res) => {
     return sendOk(res, data);
   } catch (e) {
     console.error("상벌점 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
+
+
+// 호실별 학생 목록 조회 (관리자 페이지에서 사용)
+// GET /api/admin/rooms/:room/students
+app.get(
+  "/api/admin/rooms/:room/students",
+  authenticateToken,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const room = req.params.room; // 예: "301"
+
+      if (!room) {
+        return sendErr(res, "BAD_REQUEST", "room 파라미터가 필요합니다.", 400);
+      }
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .select(`
+          id,
+          name,
+          gender,
+          profile_img,
+          room,
+          role,
+          stu_details (
+            region,
+            stu_num
+          )
+        `)
+        .eq("role", "student")
+        .eq("room", room)
+        .order("id", { ascending: true });
+
+      if (error) {
+        console.error("호실별 학생 조회 에러:", error);
+        return sendErr(
+          res,
+          "SERVER_ERROR",
+          "호실별 학생 조회 중 오류가 발생했습니다.",
+          500
+        );
+      }
+
+      return sendOk(res, data);
+    } catch (e) {
+      console.error("호실별 학생 조회 예외:", e);
+      return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
+    }
+  }
+);
+
+// 선택한 학생에게 상벌점 부여
+// POST /api/admin/meritlogs
+// body: { user_id, reason, plus_score, minus_score }
+app.post(
+  "/api/admin/meritlogs",
+  authenticateToken,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const { user_id, reason, plus_score = 0, minus_score = 0 } = req.body;
+
+      if (!user_id || !reason) {
+        return sendErr(
+          res,
+          "BAD_REQUEST",
+          "user_id와 reason은 필수입니다.",
+          400
+        );
+      }
+
+      const plus = Number(plus_score) || 0;
+      const minus = Number(minus_score) || 0;
+
+      if (plus === 0 && minus === 0) {
+        return sendErr(
+          res,
+          "BAD_REQUEST",
+          "plus_score 또는 minus_score 중 하나는 0이 아니어야 합니다.",
+          400
+        );
+      }
+
+      // 1) meritlogs에 기록 추가
+      const { error: insertError } = await supabase.from("meritlogs").insert({
+        user_id,
+        reason,
+        plus_score: plus,
+        minus_score: minus,
+      });
+
+      if (insertError) {
+        console.error("상벌점 기록 추가 에러:", insertError);
+        return sendErr(
+          res,
+          "SERVER_ERROR",
+          "상벌점 기록 추가 중 오류가 발생했습니다.",
+          500
+        );
+      }
+
+      // 2) profiles의 총점 업데이트
+      const { data: profile, error: fetchError } = await supabase
+        .from("profiles")
+        .select("plus_score, minus_score")
+        .eq("id", user_id)
+        .single();
+
+      if (fetchError || !profile) {
+        console.error("프로필 조회 에러 (상벌점 반영 전):", fetchError);
+        return sendErr(
+          res,
+          "NOT_FOUND",
+          "해당 학생 프로필을 찾을 수 없습니다.",
+          404
+        );
+      }
+
+      const newPlus = (profile.plus_score || 0) + plus;
+      const newMinus = (profile.minus_score || 0) + minus;
+
+      const { error: updateError } = await supabase
+        .from("profiles")
+        .update({
+          plus_score: newPlus,
+          minus_score: newMinus,
+        })
+        .eq("id", user_id);
+
+      if (updateError) {
+        console.error("프로필 상벌점 합계 업데이트 에러:", updateError);
+        return sendErr(
+          res,
+          "SERVER_ERROR",
+          "상벌점 합계 업데이트 중 오류가 발생했습니다.",
+          500
+        );
+      }
+
+      return sendOk(res, {
+        user_id,
+        reason,
+        plus_score: plus,
+        minus_score: minus,
+        total_plus_score: newPlus,
+        total_minus_score: newMinus,
+      });
+    } catch (e) {
+      console.error("상벌점 부여 예외:", e);
+      return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
+    }
+  }
+);
+
+// ===================== 1:1 문의(inquires) =====================
 
 // 1대1 문의글 작성
 app.post("/api/inquires", authenticateToken, async (req, res) => {
   try {
     const { title, content } = req.body;
-    const user_id = req.user.id
+    const user_id = req.user.id;
 
-    // 유효성 검사
     if (!title || !content) {
-      console.log(title, content);
       return sendErr(res, "BAD_REQUEST", "제목과 내용은 필수입니다.", 400);
     }
 
@@ -871,16 +983,11 @@ app.post("/api/inquires", authenticateToken, async (req, res) => {
     return sendOk(res, true, 201);
   } catch (e) {
     console.error("1대1 문의글 작성 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-//1대 1문의 목록 조회 (?sort=latest|oldest)
+// 1대1 문의 목록 조회 (?sort=latest|oldest)
 app.get("/api/inquires", authenticateToken, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 20, 50);
@@ -907,12 +1014,7 @@ app.get("/api/inquires", authenticateToken, async (req, res) => {
     return sendOk(res, data);
   } catch (e) {
     console.error("1대1 문의 목록 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
@@ -933,19 +1035,14 @@ app.get("/api/inquires/:postId", authenticateToken, async (req, res) => {
 
     if (error || !data) {
       console.error("1대1 문의 상세 조회 에러:", error);
-      return sendErr(
-        res,
-        "NOT_FOUND",
-        "해당 문의글을 찾을 수 없습니다.",
-        404
-      );
+      return sendErr(res, "NOT_FOUND", "해당 문의글을 찾을 수 없습니다.", 404);
     }
 
-    if (data.user_id !== req.user.id) {
+    if (data.user_id !== req.user.id && req.user.role !== "teacher") {
       return sendErr(
         res,
         "FORBIDDEN",
-        "본인이 작성한 1대1 문의글만 조회할 수 있습니다.",
+        "본인 또는 선생님만 1대1 문의글을 조회할 수 있습니다.",
         403
       );
     }
@@ -953,16 +1050,11 @@ app.get("/api/inquires/:postId", authenticateToken, async (req, res) => {
     return sendOk(res, data);
   } catch (e) {
     console.error("1대1 문의 상세 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-// 1대1 문의글 삭제
+// 1대1 문의글 삭제 (작성자만)
 app.delete("/api/inquires/:postId", authenticateToken, async (req, res) => {
   try {
     const postId = Number(req.params.postId);
@@ -996,10 +1088,7 @@ app.delete("/api/inquires/:postId", authenticateToken, async (req, res) => {
       );
     }
 
-    const { error } = await supabase
-      .from("inquires")
-      .delete()
-      .eq("id", postId);
+    const { error } = await supabase.from("inquires").delete().eq("id", postId);
 
     if (error) {
       console.error("1대1 문의글 삭제 에러:", error);
@@ -1014,154 +1103,98 @@ app.delete("/api/inquires/:postId", authenticateToken, async (req, res) => {
     return sendOk(res, true);
   } catch (e) {
     console.error("1대1 문의글 삭제 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-//1대 1문의 답변
-app.post("/api/inquires/:postId/reply", async (req, res) => {
-  try {
-    const { postId } = req.params;
-    const numericPostId = Number(postId);
+// 1대1 문의 답변 (선생님 전용)
+app.post(
+  "/api/inquires/:postId/reply",
+  authenticateToken,
+  requireTeacher,
+  async (req, res) => {
+    try {
+      const postId = Number(req.params.postId);
+      const { reply } = req.body;
 
-    const { reply } = req.body;
+      if (!reply || typeof reply !== "string") {
+        return sendErr(res, "BAD_REQUEST", "유효한 reply가 필요합니다.", 400);
+      }
 
-    if (!reply || typeof reply !== "string") {
-      return sendErr(res, "BAD_REQUEST", "유효한 reply가 필요합니다.", 400);
+      if (Number.isNaN(postId)) {
+        return sendErr(res, "BAD_REQUEST", "유효한 postId가 필요합니다.", 400);
+      }
+
+      const { data: post, error: fetchError } = await supabase
+        .from("inquires")
+        .select("id")
+        .eq("id", postId)
+        .single();
+
+      if (fetchError || !post) {
+        console.error("1대1 문의 조회 에러 (답변 전 확인):", fetchError);
+        return sendErr(
+          res,
+          "NOT_FOUND",
+          "답변할 1대1 문의글을 찾을 수 없습니다.",
+          404
+        );
+      }
+
+      const { error } = await supabase
+        .from("inquires")
+        .update({ reply })
+        .eq("id", postId);
+
+      if (error) {
+        console.error("1대1 문의글 답변 에러:", error);
+        return sendErr(
+          res,
+          "SERVER_ERROR",
+          "1대1 문의글 답변 중 오류가 발생했습니다.",
+          500
+        );
+      }
+
+      return sendOk(res, true);
+    } catch (e) {
+      console.error("1대1 문의글 답변 예외:", e);
+      return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
     }
-
-    if (Number.isNaN(numericPostId)) {
-      return sendErr(res, "BAD_REQUEST", "유효한 postId가 필요합니다.", 400);
-    }
-
-    const { data: post, error: fetchError } = await supabase
-      .from("inquires")
-      .select("id")
-      .eq("id", numericPostId)
-      .single();
-
-    if (fetchError || !post) {
-      console.error("1대1 문의 조회 에러 (답변 전 확인):", fetchError);
-      return sendErr(
-        res,
-        "NOT_FOUND",
-        "답변할 1대1 문의글을 찾을 수 없습니다.",
-        404
-      );
-    }
-
-    const { error } = await supabase
-      .from("inquires")
-      .update({ reply })
-      .eq("id", numericPostId);
-
-    if (error) {
-      console.error("1대1 문의글 답변 에러:", error);
-      return sendErr(
-        res,
-        "SERVER_ERROR",
-        "1대1 문의글 답변 중 오류가 발생했습니다.",
-        500
-      );
-    }
-
-    return sendOk(res, true);
-  } catch (e) {
-    console.error("1대1 문의글 답변 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
   }
-});
+);
 
-// 내 정보 조회 (profiles + stu_details join)
+// ===================== 내 정보 (profiles + stu_details) =====================
+
+// 내 정보 조회
 app.get("/api/profile", authenticateToken, async (req, res) => {
   try {
     const user_id = req.user.id;
 
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, name, gender, profile_img, room, plus_score, minus_score, role, stu_details(region, stu_num)")
+      .select(
+        "id, name, gender, profile_img, room, plus_score, minus_score, role, stu_details(region, stu_num)"
+      )
       .eq("id", user_id)
       .single();
 
-    // console.log(data);
-
     if (error || !data) {
       console.error("내 정보 조회 에러:", error);
-      return sendErr(
-        res,
-        "NOT_FOUND",
-        "프로필 정보를 찾을 수 없습니다.",
-        404
-      );
+      return sendErr(res, "NOT_FOUND", "프로필 정보를 찾을 수 없습니다.", 404);
     }
 
     return sendOk(res, data);
-
   } catch (e) {
     console.error("내 정보 조회 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-// 내 정보 수정
-app.put("/api/profile", async (req, res) => {
-  try {
-    const { user_id, name, class_num, room_num, province, gender } = req.body;
+// ===================== 인증 (JWT) =====================
 
-    if (!user_id) {
-      return sendErr(res, "BAD_REQUEST", "user_id는 필수입니다.", 400);
-    }
-
-    const updateFields = {};
-    if (typeof name === "string") updateFields.name = name;
-    if (typeof class_num === "number") updateFields.class_num = class_num;
-    if (typeof room_num === "number") updateFields.room_num = room_num;
-    if (typeof province === "string") updateFields.province = province;
-    if (typeof gender === "string") updateFields.gender = gender;
-
-    const { error } = await supabase
-      .from("profiles")
-      .update(updateFields)
-      .eq("id", user_id);
-
-    if (error) {
-      console.error("내 정보 수정 에러:", error);
-      return sendErr(
-        res,
-        "SERVER_ERROR",
-        "내 정보 수정 중 오류가 발생했습니다.",
-        500
-      );
-    }
-
-    return sendOk(res, true);
-  } catch (e) {
-    console.error("내 정보 수정 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
-  }
-});
-
-//회원가입
+// 회원가입
+// body: { email, name, role? }
 app.post("/api/auth/signup", async (req, res) => {
   try {
     const { email, name, role } = req.body;
@@ -1257,16 +1290,12 @@ app.post("/api/auth/signup", async (req, res) => {
     });
   } catch (e) {
     console.error("회원가입 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
 // 로그인
+// body: { email }
 app.post("/api/auth/login", async (req, res) => {
   try {
     const { email } = req.body;
@@ -1283,12 +1312,7 @@ app.post("/api/auth/login", async (req, res) => {
 
     if (error) {
       console.error("로그인 에러:", error);
-      return sendErr(
-        res,
-        "SERVER_ERROR",
-        "로그인 중 오류가 발생했습니다.",
-        500
-      );
+      return sendErr(res, "SERVER_ERROR", "로그인 중 오류가 발생했습니다.", 500);
     }
 
     if (!user) {
@@ -1320,16 +1344,11 @@ app.post("/api/auth/login", async (req, res) => {
     });
   } catch (e) {
     console.error("로그인 예외:", e);
-    return sendErr(
-      res,
-      "SERVER_ERROR",
-      "서버 내부 오류가 발생했습니다.",
-      500
-    );
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
 
-//로그아웃
+// 로그아웃
 app.post("/api/auth/logout", (req, res) => {
   res.clearCookie("access_token", {
     httpOnly: true,
@@ -1338,27 +1357,7 @@ app.post("/api/auth/logout", (req, res) => {
   return sendOk(res, true);
 });
 
-// 인증 미들웨어
-function authenticateToken(req, res, next) {
-  const token = req.cookies.access_token;
-
-  if (!token) {
-    return sendErr(res, 'Unauthorized', "로그인이 필요합니다.", 401);
-  }
-
-  try {
-    const verified = jwt.verify(token, JWT_SECRET);
-
-    req.user = verified;
-    next();
-
-  } catch (err) {
-    return sendErr(res, 'Forbidden', "유효하지 않거나 만료된 토큰입니다.", 403);
-  }
-}
-
-// console.log("SUPABASE_URL:", process.env.SUPABASE_URL);
-// console.log("SERVICE_ROLE_KEY 시작 10글자:", process.env.SUPABASE_SERVICE_ROLE_KEY?.slice(0, 10));
+// ===================== 서버 시작 =====================
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
