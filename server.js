@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
+import {getTodayDateStr, getTodayRange, getThisFriday} from './services/dateFormat.js';
 import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
@@ -70,37 +71,6 @@ const getSortOption = (req, defaultColumn = "created_at") => {
   if (sort === "oldest") return { column: defaultColumn, ascending: true };
   return { column: defaultColumn, ascending: false }; // 기본: 최신순
 };
-
-// 오늘 날짜 문자열/범위
-const getTodayDateStr = (now = new Date()) => {
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-};
-
-const getTodayRange = () => {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-  return {
-    start: start.toISOString(),
-    end: end.toISOString(),
-  };
-};
-
-//이번주 금요일 구하는 함수
-function getThisFriday() {
-  const today = new Date();
-  const currentDay = today.getDay();
-  let daysUntilFriday = 5 - currentDay;
-  if (daysUntilFriday < 0) {
-    daysUntilFriday += 7;
-  }
-  today.setDate(today.getDate() + daysUntilFriday);
-
-  return getTodayDateStr(today);
-}
 
 // 헬스 체크
 app.get("/health", (req, res) => {
@@ -175,6 +145,37 @@ function decrypt(text) {
 
   return decrypted.toString();
 }
+
+
+// ===================== 사감쌤 ===================
+app.get("/api/teacherInfo", authenticateToken, (req, res) => {
+  try {
+    const gender = req.query.gender;
+
+    if (!gender) {
+      return sendErr(res, "BAD_REQUEST", "gende 필수입니다.", 400);
+    }
+
+    const teachers = {
+      male: [{name : '박진리', phone : '010-9876-1234'}, {name : '남택민', phone : '010-1245-5689'}],
+      female: [{name : '김선경', phone : '010-4567-8901'}, {name : '김아람', phone : '010-2468-1357'}]
+    }
+    
+    const user_gender = gender == 0 ? 'male' : 'female';
+
+    const now = new Date();
+    const currentDay = now.getDay();
+    const idx = currentDay % 2;
+
+    const data = teachers[user_gender][idx];
+
+    return sendOk(res, data, 200);
+  } catch(e) {
+    console.error("사감쌤 조회 예외:", e);
+    return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
+  }
+});
+
 
 // ===================== 공지 =====================
 
