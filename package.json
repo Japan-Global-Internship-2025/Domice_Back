@@ -20,5 +20,20 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.1",
     "nodemon": "^3.1.11"
+  },
+  "nodemonConfig": {
+    "ignore": [
+      "node_modules",
+      "dist",
+      "build",
+      "logs/*",
+      "*.log",
+      ".git",
+      "public/uploads/*"
+    ],
+    "watch": [
+      "src/"
+    ],
+    "ext": "js, json, ts, html"
   }
 }

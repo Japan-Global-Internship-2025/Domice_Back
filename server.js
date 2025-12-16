@@ -142,7 +142,7 @@ app.get("/api/notices", async (req, res) => {
 
     const { data, error } = await supabase
       .from("notices")
-      .select("id, title, content, target_grades, author, created_at, updated_at")
+      .select("*")
       .order(column, { ascending })
       .limit(limit);
 
@@ -166,7 +166,7 @@ app.get("/api/notices", async (req, res) => {
 // 오늘 공지 개수 조회 (?grade=1)
 app.get("/api/notices/today-count", authenticateToken, async (req, res) => {
   try {
-    const { grade } = req.query;
+    const { grade } = req.user.stu_num[1];
     const { start, end } = getTodayRange();
 
     let query = supabase
@@ -176,7 +176,7 @@ app.get("/api/notices/today-count", authenticateToken, async (req, res) => {
       .lte("created_at", end);
 
     if (grade) {
-      query = query.contains("target_grades", [Number(grade)]);
+      query = query.contains("target", [Number(grade)]);
     }
 
     const { count, error } = await query;
@@ -202,38 +202,21 @@ app.get("/api/notices/today-count", authenticateToken, async (req, res) => {
 // body: { title, content, target_grades: "[1,2,3]" or [1,2,3] }
 app.post("/api/notices", authenticateToken, requireTeacher, async (req, res) => {
   try {
-    const { title, content, target_grades } = req.body;
+    const { title, content, target } = req.body;
     const userId = req.user.id;
 
     if (!title || !content) {
       return sendErr(res, "BAD_REQUEST", "title, content는 필수입니다.", 400);
     }
-
-    let gradesArray = null;
-    if (typeof target_grades === "string") {
-      try {
-        gradesArray = JSON.parse(target_grades);
-      } catch (e) {
-        return sendErr(
-          res,
-          "BAD_REQUEST",
-          'target_grades는 "[1,2,3]" 문자열이거나 배열이어야 합니다.',
-          400
-        );
-      }
-    } else if (Array.isArray(target_grades)) {
-      gradesArray = target_grades;
-    }
-
     const { data, error } = await supabase
       .from("notices")
       .insert({
         title,
         content,
-        target_grades: gradesArray,
+        target,
         author: userId,
       })
-      .select("id, title, content, target_grades, author, created_at, updated_at")
+      .select("id, title, content, target, author, created_at")
       .single();
 
     if (error) {
@@ -264,7 +247,7 @@ app.get("/api/notices/:noticeId", async (req, res) => {
 
     const { data, error } = await supabase
       .from("notices")
-      .select("id, title, content, target_grades, author, created_at, updated_at")
+      .select("id, title, content, target, author, created_at")
       .eq("id", noticeId)
       .single();
 
@@ -288,7 +271,7 @@ app.put(
   async (req, res) => {
     try {
       const noticeId = Number(req.params.noticeId);
-      const { title, content, target_grades } = req.body;
+      const { title, content, target } = req.body;
 
       if (Number.isNaN(noticeId)) {
         return sendErr(res, "BAD_REQUEST", "유효한 noticeId가 필요합니다.", 400);
@@ -296,23 +279,9 @@ app.put(
 
       const updateFields = {};
 
-      if (typeof title === "string") updateFields.title = title;
-      if (typeof content === "string") updateFields.content = content;
-
-      if (typeof target_grades === "string") {
-        try {
-          updateFields.target_grades = JSON.parse(target_grades);
-        } catch (e) {
-          return sendErr(
-            res,
-            "BAD_REQUEST",
-            'target_grades는 "[1,2,3]" 문자열이거나 배열이어야 합니다.',
-            400
-          );
-        }
-      } else if (Array.isArray(target_grades)) {
-        updateFields.target_grades = target_grades;
-      }
+      updateFields.title = title;
+      updateFields.content = content;
+      updateFields.target = target;
 
       const { error } = await supabase
         .from("notices")
@@ -616,7 +585,7 @@ app.post("/api/roomcheckins", authenticateToken, async (req, res) => {
       now.getMinutes()
     ).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
 
-    const { error } = await supabase.from("roomcheckins").insert({
+    const { error } = await supabase.from("room_checkins").insert({
       user_id: userId,
       check_date: checkDate,
       check_time: checkTime,
@@ -647,7 +616,7 @@ app.get("/api/roomcheckins/today", authenticateToken, async (req, res) => {
     const checkDate = getTodayDateStr();
 
     const { data, error } = await supabase
-      .from("roomcheckins")
+      .from("room_checkins")
       .select("id, check_date, check_time, check_type")
       .eq("user_id", userId)
       .eq("check_date", checkDate)
@@ -669,6 +638,96 @@ app.get("/api/roomcheckins/today", authenticateToken, async (req, res) => {
     return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
 });
+
+// ==================== 외출 신청 및 내역 =================
+// 외출 신청 등록
+app.post("/api/leave", async (req, res) => {
+  try {
+    const { user_id, leave_date, reason } = req.body;
+
+    if (!user_id || !leave_date || !reason) {
+      return sendErr(
+        res,
+        "BAD_REQUEST",
+        "user_id, leave_date(YYYY-MM-DD), reason은 필수입니다.",
+        400
+      );
+    }
+
+    const { data, error } = await supabase
+      .from("leave_requests")
+      .insert({
+        user_id,
+        leave_date,
+        reason,
+        is_approved: null,
+        approved_at: null,
+      })
+      .select(
+        "id, user_id, leave_date, reason, is_approved, approved_at, created_at"
+      )
+      .single();
+
+    if (error) {
+      console.error("외출 신청 등록 에러:", error);
+      return sendErr(
+        res,
+        "SERVER_ERROR",
+        "외출 신청 등록 중 오류가 발생했습니다.",
+        500
+      );
+    }
+
+    return sendOk(res, data, 201);
+  } catch (e) {
+    console.error("외출 신청 등록 예외:", e);
+    return sendErr(
+      res,
+      "SERVER_ERROR",
+      "서버 내부 오류가 발생했습니다.",
+      500
+    );
+  }
+});
+
+// 외출 신청 내역 조회
+app.get("/api/leave", authenticateToken, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 20, 50);
+    const userId = req.user.id;
+
+    const { data, error } = await supabase
+      .from("leave_requests")
+      .select(
+        "id, user_id, leave_date, reason, is_approved, approved_at, created_at"
+      )
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error("외출 신청 내역 조회 에러:", error);
+      return sendErr(
+        res,
+        "SERVER_ERROR",
+        "외출 신청 내역 조회 중 오류가 발생했습니다.",
+        500
+      );
+    }
+
+    return sendOk(res, data);
+  } catch (e) {
+    console.error("외출 신청 내역 조회 예외:", e);
+    return sendErr(
+      res,
+      "SERVER_ERROR",
+      "서버 내부 오류가 발생했습니다.",
+      500
+    );
+  }
+});
+
+
 
 // ===================== 외출/잔류 여부(stay_status) =====================
 
@@ -1370,7 +1429,8 @@ app.post("/api/auth/login", async (req, res) => {
 
     const payload = {
       id: userData.id,
-      role: userData.role
+      role: userData.role,
+      stu_num: userData.stu_num
     };
 
     const token = generateToken(payload);
