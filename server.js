@@ -84,6 +84,7 @@ function authenticateToken(req, res, next) {
   const token = req.cookies.access_token;
 
   if (!token) {
+    console.log('토큰이 필요함!');
     return sendErr(res, "Unauthorized", "로그인이 필요합니다.", 401);
   }
 
