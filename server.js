@@ -1609,10 +1609,10 @@ app.post("/api/auth/login", async (req, res) => {
     res.cookie('access_token', token, {
       maxAge: 1000 * 60 * 60 * 24 * 30,
       httpOnly: true,
-      // secure: req.secure,
-      secure: true,
-      // sameSite: req.secure ? 'None' : 'lax',
-      sameSite: 'none'
+      secure: req.secure,
+      // secure: true,
+      sameSite: req.secure ? 'None' : 'lax',
+      // sameSite: 'none'
     });
 
     return sendOk(res, userData);
@@ -1631,10 +1631,10 @@ app.post("/api/auth/login", async (req, res) => {
 app.get("/api/auth/logout", async (req, res) => {
   res.clearCookie('access_token', {
     httpOnly: true,
-    // secure: req.secure,
-    secure: true,
-    // sameSite: req.secure ? 'None' : 'lax',
-    sameSite: 'none'
+    secure: req.secure,
+    // secure: true,
+    sameSite: req.secure ? 'None' : 'lax',
+    // sameSite: 'none'
   });
 
   return sendOk(res, { success: "true" });
