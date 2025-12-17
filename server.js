@@ -66,11 +66,11 @@ const sendErr = (res, code, message, status = 400) =>
     error: { code, message },
   });
 
-const getSortOption = (req, defaultColumn = "created_at") => {
-  const { sort } = req.query;
-  if (sort === "oldest") return { column: defaultColumn, ascending: true };
-  return { column: defaultColumn, ascending: false }; // 기본: 최신순
-};
+  const getSortOption = (req, defaultColumn = "created_at") => {
+    const { sort } = req.query;
+    if (sort === "oldest") return { column: defaultColumn, ascending: true };
+    return { column: defaultColumn, ascending: false }; // 기본: 최신순
+  };
 
 // 헬스 체크
 app.get("/health", (req, res) => {
@@ -567,6 +567,7 @@ app.put("/api/posts/:postId", authenticateToken, async (req, res) => {
 app.delete("/api/posts/:postId", authenticateToken, async (req, res) => {
   try {
     const postId = Number(req.params.postId);
+    const role = req.user.role;
 
     if (Number.isNaN(postId)) {
       return sendErr(res, "BAD_REQUEST", "유효한 postId가 필요합니다.", 400);
@@ -583,7 +584,7 @@ app.delete("/api/posts/:postId", authenticateToken, async (req, res) => {
       return sendErr(res, "NOT_FOUND", "삭제할 게시글을 찾을 수 없습니다.", 404);
     }
 
-    if (post.user_id !== req.user.id) {
+    if (role != 'teacher' && post.user_id !== req.user.id) {
       return sendErr(
         res,
         "FORBIDDEN",
