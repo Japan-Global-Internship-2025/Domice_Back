@@ -1586,6 +1586,7 @@ app.post("/api/auth/login", async (req, res) => {
 
     userData.room = data.length == 1 && data.role == 'student' ? data[0].stu_details.room : null;
     userData.join = data.length == 1 ? true : false;
+    userData.gender = data.length == 1 ? data.gender;
 
     if (error) {
       console.error("로그인 에러:", error);
