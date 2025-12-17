@@ -1574,7 +1574,7 @@ app.post("/api/auth/login", async (req, res) => {
       console.error('Error fetching user info:', error);
     }
     const id = userData.id;
-    console.log(id);
+    // console.log(id);
 
     const { data, error } = await supabase
       .from("profiles")
@@ -1585,7 +1585,6 @@ app.post("/api/auth/login", async (req, res) => {
 
     userData.room = data.length == 1 && data.role == 'student' ? data[0].stu_details.room : null;
     userData.join = data.length == 1 ? true : false;
-    userData.gender = data.length == 1 && data.gender;
 
     if (error) {
       console.error("로그인 에러:", error);
@@ -1601,7 +1600,6 @@ app.post("/api/auth/login", async (req, res) => {
       id: userData.id,
       role: userData.role,
       stu_num: userData.stu_num,
-      gender: userData.gender
     };
 
     const token = generateToken(payload);
