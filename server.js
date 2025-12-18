@@ -5,7 +5,7 @@ import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
-import {getTodayDateStr, getTodayRange, getThisFriday} from './services/dateFormat.js';
+import { getTodayDateStr, getTodayRange, getThisFriday } from './services/dateFormat.js';
 import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
@@ -66,11 +66,11 @@ const sendErr = (res, code, message, status = 400) =>
     error: { code, message },
   });
 
-  const getSortOption = (req, defaultColumn = "created_at") => {
-    const { sort } = req.query;
-    if (sort === "oldest") return { column: defaultColumn, ascending: true };
-    return { column: defaultColumn, ascending: false }; // 기본: 최신순
-  };
+const getSortOption = (req, defaultColumn = "created_at") => {
+  const { sort } = req.query;
+  if (sort === "oldest") return { column: defaultColumn, ascending: true };
+  return { column: defaultColumn, ascending: false }; // 기본: 최신순
+};
 
 // 헬스 체크
 app.get("/health", (req, res) => {
@@ -157,10 +157,10 @@ app.get("/api/teacherInfo", authenticateToken, (req, res) => {
     }
 
     const teachers = {
-      male: [{name : '박진리', phone : '010-9876-1234'}, {name : '남택민', phone : '010-1245-5689'}],
-      female: [{name : '김선경', phone : '010-4567-8901'}, {name : '김아람', phone : '010-2468-1357'}]
+      male: [{ name: '박진리', phone: '010-9876-1234' }, { name: '남택민', phone: '010-1245-5689' }],
+      female: [{ name: '김선경', phone: '010-4567-8901' }, { name: '김아람', phone: '010-2468-1357' }]
     }
-    
+
     const user_gender = gender == 0 ? 'male' : 'female';
 
     const now = new Date();
@@ -170,7 +170,7 @@ app.get("/api/teacherInfo", authenticateToken, (req, res) => {
     const data = teachers[user_gender][idx];
 
     return sendOk(res, data, 200);
-  } catch(e) {
+  } catch (e) {
     console.error("사감쌤 조회 예외:", e);
     return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
   }
@@ -1135,8 +1135,8 @@ app.post(
       const { error: insertError } = await supabase.from("merit_logs").insert({
         user_id,
         reason,
-        log_type: type === 'plus'? '상점' : '벌점',
-        score: score 
+        log_type: type === 'plus' ? '상점' : '벌점',
+        score: score
       });
 
       if (insertError) {
@@ -1556,9 +1556,12 @@ app.post("/api/auth/login", async (req, res) => {
           Authorization: `Bearer ${accessToken}`,
         },
       });
+      if (!response.ok) throw new Error("Google API 호출 실패"); // 실패 시 throw
       userData = await response.json();
+
       if (userData.email === 'kjt081025@gmail.com') {
         userData.role = 'teacher';
+        userData.stu_num = null;
       }
       else if (userData.email.split("@")[1] != "e-mirim.hs.kr") {
         return sendErr(res,
@@ -1578,14 +1581,16 @@ app.post("/api/auth/login", async (req, res) => {
 
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, stu_details(*)")
+      .select("*, stu_details(*)")
       .eq("id", id)
+      .single()
 
     console.log(data);
 
-    userData.room = data.length == 1 && data.role == 'student' ? data[0].stu_details.room : null;
-    userData.join = data.length == 1 ? true : false;
-    userData.gender = data.length == 1 && data.gender;
+    const isJoined = !!data;
+
+    userData.join = isJoined;
+    userData.role = isJoined ? data.role : userData.role;
 
     if (error) {
       console.error("로그인 에러:", error);
@@ -1601,7 +1606,6 @@ app.post("/api/auth/login", async (req, res) => {
       id: userData.id,
       role: userData.role,
       stu_num: userData.stu_num,
-      gender: userData.gender
     };
 
     const token = generateToken(payload);
