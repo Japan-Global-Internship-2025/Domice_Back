@@ -1583,14 +1583,15 @@ app.post("/api/auth/login", async (req, res) => {
       .from("profiles")
       .select("*, stu_details(*)")
       .eq("id", id)
-      .single()
 
     console.log(data);
 
-    const isJoined = !!data;
+    const userExists = data && data.length > 0;
+    const dbUser = userExists ? data[0] : null;
 
-    userData.join = isJoined;
-    userData.role = isJoined ? data.role : userData.role;
+    // 3. 안전하게 데이터 할당
+    userData.join = userExists;
+    userData.role = dbUser?.role || userData.role;
 
     if (error) {
       console.error("로그인 에러:", error);
