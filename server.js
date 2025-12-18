@@ -82,6 +82,7 @@ app.get("/health", (req, res) => {
 // 인증 미들웨어
 function authenticateToken(req, res, next) {
   const token = req.cookies.access_token;
+  console.log(token);
 
   if (!token) {
     return sendErr(res, "Unauthorized", "로그인이 필요합니다.", 401);
@@ -1617,7 +1618,8 @@ app.post("/api/auth/login", async (req, res) => {
       // secure: req.secure,
       secure: true,
       // sameSite: req.secure ? 'None' : 'lax',
-      sameSite: 'none'
+      sameSite: 'none',
+      path: '/',
     });
 
     return sendOk(res, userData);
