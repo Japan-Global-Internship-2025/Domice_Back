@@ -1,5 +1,5 @@
 // ===================== 사감쌤 ===================
-export const teacherInfo = (req, res) => {
+const teacherInfo = (req, res) => {
     try {
         const gender = req.query.gender;
 

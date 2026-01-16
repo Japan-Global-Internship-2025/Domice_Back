@@ -1,6 +1,6 @@
 
 // 내 정보 조회
-export const getProfile = async (req, res) => {
+const getProfile = async (req, res) => {
     try {
         const user_id = req.user.id;
 
@@ -26,7 +26,7 @@ export const getProfile = async (req, res) => {
 
 
 //회원가입
-export const signup = async (req, res) => {
+const signup = async (req, res) => {
     try {
         console.log(req.body);
         const { id,
@@ -115,7 +115,7 @@ export const signup = async (req, res) => {
 }
 
 //로그인
-export const login = async (req, res) => {
+const login = async (req, res) => {
     console.log(req.secure);
     try {
         const { accessToken } = req.body;
@@ -214,7 +214,7 @@ export const login = async (req, res) => {
 }
 
 //로그아웃
-export const logout = async (req, res) => {
+const logout = async (req, res) => {
     res.clearCookie('access_token', {
         httpOnly: true,
         // secure: req.secure,
@@ -227,7 +227,7 @@ export const logout = async (req, res) => {
 }
 
 //내 정보 가져오기
-export const getMe = async (req, res) => {
+const getMe = async (req, res) => {
     try {
         const user_id = req.user.id;
 
@@ -261,3 +261,5 @@ export const getMe = async (req, res) => {
         );
     }
 }
+
+export { getProfile, signup, login, logout, getMe };

@@ -1,4 +1,4 @@
-export const requestLeave = async (req, res) => {
+const requestLeave = async (req, res) => {
         try {
             const { leave_date, reason } = req.body;
             const user_id = req.user.id;
@@ -46,7 +46,7 @@ export const requestLeave = async (req, res) => {
         }
     }
 
-export const getLeaveRequests = async (req, res) => {
+const getLeaveRequests = async (req, res) => {
         try {
             const limit = Math.min(Number(req.query.limit) || 20, 50);
             const userId = req.user.id;
@@ -89,7 +89,7 @@ export const getLeaveRequests = async (req, res) => {
         }
     }
 
-export const checkLeaveRequest = async (req, res) => {
+const checkLeaveRequest = async (req, res) => {
     try {
         const { id, approval } = req.body;
 
@@ -132,3 +132,5 @@ export const checkLeaveRequest = async (req, res) => {
         );
     }
 }
+
+export { requestLeave, getLeaveRequests, checkLeaveRequest };

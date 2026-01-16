@@ -1,7 +1,7 @@
 // ===================== 입실 체크 =====================
 
 //QR코드 문자 (암호화)
-export const getQRCode = async (req, res) => {
+const getQRCode = async (req, res) => {
     const today = new Date().toISOString().split('T')[0];
 
     const payload = JSON.stringify({
@@ -26,7 +26,7 @@ export const getQRCode = async (req, res) => {
 
 // 입실 체크 등록: 하교/석식 후/8시 복귀
 // body: { check_type: "AFTER_SCHOOL" | "AFTER_DINNER" | "AFTER_8PM" }
-export const roomCheckin = async (req, res) => {
+const roomCheckin = async (req, res) => {
     console.log(req.body);
     const { qrData } = req.body;
     const user_id = req.user.id;
@@ -114,7 +114,7 @@ export const roomCheckin = async (req, res) => {
 }
 
 // 오늘 입실 체크 조회
-export const getTodayRoomCheckins = async (req, res) => {
+const getTodayRoomCheckins = async (req, res) => {
     try {
         const userId = req.user.id;
         const role = req.user.role;
@@ -154,3 +154,5 @@ export const getTodayRoomCheckins = async (req, res) => {
         return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
     }
 }
+
+export { getQRCode, roomCheckin, getTodayRoomCheckins };

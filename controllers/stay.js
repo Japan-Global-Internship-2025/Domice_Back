@@ -1,4 +1,4 @@
-export const applyStay = async (req, res) => {
+const applyStay = async (req, res) => {
     try {
         const user_id = req.user.id;
         const { status } = req.body;
@@ -79,7 +79,7 @@ export const applyStay = async (req, res) => {
     }
 }
 
-export const getStayStatus = async (req, res) => {
+const getStayStatus = async (req, res) => {
     try {
         const user_id = req.user.id;
         const role = req.user.role;
@@ -120,3 +120,5 @@ export const getStayStatus = async (req, res) => {
         return sendErr(res, "SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500);
     }
 }
+
+export { applyStay, getStayStatus };

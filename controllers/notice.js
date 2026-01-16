@@ -193,4 +193,4 @@ const deleteNotice = async (req, res) => {
     }
 }
 
-export { getNoticeList, createNotice, getNotice, updateNotice, deleteNotice };
+export { getNoticeList, createNotice, getNotice, updateNotice, deleteNotice, getTodayNoticeCount };
