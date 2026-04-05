@@ -6,7 +6,6 @@ import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { getTodayDateStr, getTodayRange, getThisFriday } from './utils/dateFormat.js';
-import { createClient } from "@supabase/supabase-js";
 import { getProfile, login, logout, getMe, signup } from './controllers/auth.js';
 import { getNoticeList, getTodayNoticeCount, createNotice, getNotice, updateNotice, deleteNotice } from './controllers/notice.js';
 import { teacherInfo } from './controllers/teacherInfo.js';
@@ -19,6 +18,8 @@ import { createInquire, inquireList, getInquire, deleteInquire, replyInquire } f
 import { encrypt, decrypt } from './utils/qrCode.js';
 import { authenticateToken, requireTeacher, generateToken } from './utils/auth.js';
 import { getSortOption } from './utils/sort.js';
+import { supabase } from './utils/supabase.js';
+import { sendOk } from './utils/send.js';
 
 dotenv.config();
 
@@ -29,16 +30,6 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const ALGORITHM = 'aes-256-cbc';
 const ENCRYPTION_KEY = crypto.scryptSync(process.env.QR_CODE_KEY, 'salt', 32);
 const IV_LENGTH = 16;
-
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    console.error("[FATAL] SUPABASE_URL 또는 SUPABASE_SERVICE_ROLE_KEY가 없습니다.");
-    process.exit(1);
-}
-
-const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-);
 
 // CORS 설정
 const allowedOrigins = [

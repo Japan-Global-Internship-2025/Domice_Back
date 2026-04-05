@@ -1,3 +1,11 @@
+import jwt from "jsonwebtoken";
+import { sendErr } from "./send.js";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const JWT_SECRET = process.env.JWT_SECRET;
+
 // ===================== 인증 / 권한 =====================
 
 // 인증 미들웨어

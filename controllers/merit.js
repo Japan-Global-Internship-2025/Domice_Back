@@ -1,3 +1,6 @@
+import { supabase } from '../utils/supabase.js';
+import { sendOk, sendErr } from '../utils/send.js';
+
 // ===================== 상벌점 =====================
 
 // 상벌점 로그 조회 (학생 본인)

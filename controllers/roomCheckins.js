@@ -1,3 +1,9 @@
+import crypto from 'crypto';
+import { supabase } from '../utils/supabase.js';
+import { sendOk, sendErr } from '../utils/send.js';
+import { encrypt, decrypt } from '../utils/qrCode.js';
+import { getTodayDateStr } from '../utils/dateFormat.js';
+
 // ===================== 입실 체크 =====================
 
 //QR코드 문자 (암호화)

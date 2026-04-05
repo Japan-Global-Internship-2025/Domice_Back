@@ -1,3 +1,7 @@
+import { supabase } from '../utils/supabase.js';
+import { sendOk, sendErr } from '../utils/send.js';
+import { getSortOption } from '../utils/sort.js';
+
 // ===================== 1:1 문의(inquires) =====================
 
 // 1대1 문의글 작성

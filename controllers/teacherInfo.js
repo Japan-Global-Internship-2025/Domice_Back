@@ -1,3 +1,5 @@
+import { sendOk, sendErr } from '../utils/send.js';
+
 // ===================== 사감쌤 ===================
 const teacherInfo = (req, res) => {
     try {
