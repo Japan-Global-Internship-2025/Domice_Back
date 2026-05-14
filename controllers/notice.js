@@ -79,13 +79,24 @@ const createNotice = async (req, res) => {
         if (!title || !content) {
             return sendErr(res, "BAD_REQUEST", "title, content는 필수입니다.", 400);
         }
+
+        const { data: userData, error: userError } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", userId)
+            .single();
+        if (userError || !userData) {
+            console.error("유저 정보 조회 에러:", userError);
+            return sendErr(res, "NOT_FOUND", "유저 정보를 찾을 수 없습니다.", 404);
+        }
+
         const { data, error } = await supabase
             .from("notices")
             .insert({
                 title,
                 content,
                 target,
-                author: userId,
+                author: userData.name,
             })
             .select("id, title, content, target, author, created_at")
             .single();
