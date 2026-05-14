@@ -82,7 +82,7 @@ const createNotice = async (req, res) => {
 
         const { data: userData, error: userError } = await supabase
             .from("profiles")
-            .select("role")
+            .select("role, name")
             .eq("id", userId)
             .single();
         if (userError || !userData) {
@@ -99,7 +99,7 @@ const createNotice = async (req, res) => {
                 author: userData.name,
             })
             .select("id, title, content, target, author, created_at")
-            .single();
+            .single();``
 
         if (error) {
             console.error("공지 작성 에러:", error);
